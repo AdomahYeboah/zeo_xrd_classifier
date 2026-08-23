@@ -1,17 +1,5 @@
 """
-ZEO-XRD GRAD-CAM VISUALISATION
-
-Grad-CAM interpretation utilities for the zeolite framework classifier.
-Mirrors the role of ``autoXRD_vis.py`` in the autoXRD package layout.
-
-Includes:
-  * compute_cam()             - gradient-weighted activation maps
-  * plot_pattern_cam()        - single-sample CAM overlay
-  * plot_average_cams()       - class-averaged CAMs over the simulated domain
-  * plot_average_cams_experimental()   - experimental-domain CAMs
-  * compare_cam_domains()     - simulated vs experimental side-by-side
-  * plot_test_cams()          - CAM gallery for a test set
-  * plot_class_cam_gallery()  - one aggregate CAM per framework
+Grad-CAM visualisation utilities for the zeolite framework classifier.
 """
 
 import logging
@@ -28,14 +16,10 @@ from config import CAM_DIR, MODEL_DIR, N_GRID, TARGET_FRAMEWORKS, TTH_GRID
 log = logging.getLogger("zeolite_vis")
 
 
-# GRAD-CAM CORE
-
 def compute_cam(model, x, class_idx=None, layer_name="cam_conv"):
     """
     Grad-CAM heatmap for a single pattern.
-
-    Returns (weights, cam) where ``weights`` is the grad-weighted mean of the
-    conv filters and ``cam`` the upsampled activation map on TTH_GRID.
+    Returns (weights, cam) with ``cam`` upsampled onto TTH_GRID.
     """
     x = x.astype("float32")
     if x.ndim == 1:
@@ -61,8 +45,6 @@ def compute_cam(model, x, class_idx=None, layer_name="cam_conv"):
         cam = cam / m
     return weights.numpy()[0], cam.astype(np.float32)
 
-
-# PLOTTING HELPERS
 
 def _savefig(fig, path):
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -107,12 +89,7 @@ def plot_average_cams(model, X_by_class, out_dir):
 
 
 def plot_average_cams_experimental(model, X_exp, y_exp, out_dir):
-    """
-    Class-averaged Grad-CAM computed on the experimental domain.
-    The model may never have seen properly anti-aliased experimental patterns
-    during training (simulated domain), so these maps reveal what it actually
-    attends to on real data, where aliasing artefacts are absent.
-    """
+    """Class-averaged Grad-CAM computed on experimental patterns."""
     os.makedirs(out_dir, exist_ok=True)
     cams_by_class = {fw: [] for fw in TARGET_FRAMEWORKS}
     for x, ye in zip(X_exp, y_exp):
@@ -132,12 +109,7 @@ def plot_average_cams_experimental(model, X_exp, y_exp, out_dir):
 
 
 def compare_cam_domains(model, X_by_class, X_exp, y_exp, out_dir):
-    """
-    Side-by-side simulated vs experimental Grad-CAM for each class.
-    Highlights transfer-gap artefacts: if simulated-domain maps concentrate on
-    aliasing-corrupted regions while experimental maps attend elsewhere, the
-    model is relying on grid artefacts rather than physics.
-    """
+    """Side-by-side simulated vs experimental mean Grad-CAM per class."""
     os.makedirs(out_dir, exist_ok=True)
     for fw in TARGET_FRAMEWORKS:
         if fw not in X_by_class or not any(TARGET_FRAMEWORKS[int(y)] == fw for y in y_exp):

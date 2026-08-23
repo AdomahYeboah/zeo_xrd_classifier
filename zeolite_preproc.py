@@ -1,21 +1,5 @@
 """
-ZEO-XRD PREPROCESSING AND AUGMENTATION
-
-Module dedicated to XRD pattern preprocessing and physics-informed data
-augmentation for zeolite framework identification.  This mirrors the role of
-``autoXRD.py`` in the autoXRD package layout.
-
-Features implemented here
-Anti-aliased downsampling (Lanczos-2 + box pre-filter) resamples
-         experimental patterns and stored .xy files whose step
-         is finer than STEP * 0.75.
-phi_resample_jitter() teaches the CNN what aliasing looks like.
-         Applied only in the simulated augmentation branch.
-load_xy() also anti-aliases finer-than-grid simulated .xy files.
-
-Also contains: SNIP background subtraction, Savitzky-Golay smoothing,
-the CIF-to-XY simulation worker (pymatgen), noise / envelope pools and the
-full suite of physics-informed ``phi_*`` transforms.
+Preprocessing and physics-informed data augmentation for zeolite XRD patterns.
 """
 
 import logging
@@ -58,8 +42,6 @@ from config import (
 log = logging.getLogger("zeolite_preproc")
 
 
-# ANTI-ALIASED RESAMPLING
-
 def _lanczos2_kernel(x):
     """Lanczos-2 window: sinc(x) * sinc(x/2) for |x|<2, else 0."""
     x   = np.asarray(x, dtype=np.float64)
@@ -75,14 +57,9 @@ def _lanczos2_kernel(x):
 
 def _antialias_resample(tth_raw, y_raw, tth_out):
     """
-    Anti-aliased resample from a fine grid onto tth_out (TTH_GRID).
-
-    Steps:
-      1. Box-filter pre-blur (width = ceil(decimation_ratio)) to suppress
-         frequencies above the new Nyquist.
-      2. Lanczos-2 kernel resampling (4-point support) for sub-pixel accuracy.
-
-    Falls back to np.interp when raw_step >= STEP * 0.75 (no decimation needed).
+    Anti-aliased resample onto tth_out: box pre-filter (width =
+    ceil(decimation_ratio)) followed by Lanczos-2 kernel resampling.
+    Falls back to np.interp when raw_step >= STEP * 0.75.
     """
     if len(tth_raw) < 8:
         return np.interp(tth_out, tth_raw, y_raw, left=0.0, right=0.0).astype(np.float32)
@@ -106,8 +83,6 @@ def _antialias_resample(tth_raw, y_raw, tth_out):
     return np.clip(y_out, 0.0, None).astype(np.float32)
 
 
-# PREPROCESSING
-
 def _snip_background(y, iterations=SNIP_ITER):
     """SNIP iterative background estimator (Statistics-sensitive Non-linear
     Iterative Peak-clipping)."""
@@ -124,13 +99,8 @@ def _snip_background(y, iterations=SNIP_ITER):
 
 def preprocess_exp(path):
     """
-    Load and preprocess an experimental .xy file onto TTH_GRID.
-
-    Uses _antialias_resample when the
-    raw 2θ step is finer than STEP * 0.75, preventing aliasing-driven
-    peak-height corruption and false doublet artefacts.
-
-    Pipeline: AA-resample, SNIP background subtraction, SG smooth, max-normalise
+    Load and preprocess an experimental .xy file onto TTH_GRID:
+    AA-resample, SNIP background subtraction, SG smooth, max-normalise.
     """
     data = np.loadtxt(path)
     if data.ndim > 1:
@@ -160,8 +130,6 @@ def smooth_sim(y):
     m = y.max()
     return (y / m).astype(np.float32) if m > 0 else y
 
-
-# CIF SIMULATION WORKER
 
 def _write_worker(path):
     with open(path, "w") as f:
@@ -263,8 +231,6 @@ def load_labeled_exp(folder):
     return np.array(x, dtype=np.float32), np.array(y), np.array(paths)
 
 
-# NOISE & ENVELOPE POOLS
-
 noise_pool: list = []
 mult_envs:  list = []
 
@@ -303,17 +269,12 @@ def _sample_noise(n):
 
 
 def build_pools(unlabeled_patterns):
-    """
-    Populate the module-level noise and multi-scaled-envelope pools from a
-    list of preprocessed unlabelled experimental patterns.  The pools are
-    consumed by augment_sim() / augment_experimental_set().
-    """
+    """Populate the module-level noise and envelope pools from preprocessed
+    unlabelled patterns (consumed by augment_sim / augment_experimental_set)."""
     global noise_pool, mult_envs
     noise_pool = _extract_noise_residuals(unlabeled_patterns)
     mult_envs  = _extract_mult_envelopes(unlabeled_patterns)
 
-
-# AUGMENTATION PHYSICS FUNCTIONS
 
 def _pseudo_voigt_kernel(fwhm_deg, eta):
     half_win = max(3, int(4 * fwhm_deg / STEP))
@@ -469,12 +430,8 @@ def phi_low_angle_hump(y, fw):
 
 
 def phi_resample_jitter(y):
-    """
-    Aliasing augmentation, simulating naive decimation artefacts.
-    Applied only to simulated patterns (NOT experimental, which are already
-    properly anti-alias resampled by preprocess_exp).
-    Probability: 0.40.
-    """
+    """Simulate naive decimation artefacts (simulated patterns only;
+    experimental patterns are already anti-alias resampled)."""
     if np.random.random() > 0.40: return y
     uf     = np.random.choice([3, 5, 7, 10])
     y_fine = np.interp(np.linspace(TTH_MIN, TTH_MAX, N_GRID*uf), TTH_GRID, y)
@@ -486,11 +443,8 @@ def phi_resample_jitter(y):
     return (yc / m).astype(np.float32) if m > 0 else yc.astype(np.float32)
 
 
-# AUGMENTATION PIPELINES
-
 def augment_sim(x, fw):
-    """Full physics-informed augmentation for a simulated pattern.
-    Includes phi_resample_jitter just before noise injection."""
+    """Full physics-informed augmentation for a simulated pattern."""
     y = x.copy()
     y = phi_lattice_strain(y, fw)
     y = phi_zero_displacement(y)
@@ -518,11 +472,8 @@ def augment_sim(x, fw):
 
 
 def augment_experimental_set(X_exp, y_exp, encoder):
-    """
-    Augment labelled experimental patterns.
-    phi_resample_jitter is intentionally omitted because experimental patterns
-    are already anti-alias resampled by preprocess_exp().
-    """
+    """Augment labelled experimental patterns (phi_resample_jitter omitted;
+    already anti-alias resampled by preprocess_exp)."""
     xs, ys = [], []
     for x, ye in zip(X_exp, y_exp):
         fw = TARGET_FRAMEWORKS[int(ye)]
@@ -547,7 +498,7 @@ def augment_experimental_set(X_exp, y_exp, encoder):
                 env   = mult_envs[np.random.randint(len(mult_envs))]
                 alpha = np.random.uniform(0.2, 0.75)
                 yy    = yy * (alpha * env + (1.0 - alpha))
-            # NOTE: phi_resample_jitter intentionally omitted
+            # phi_resample_jitter intentionally omitted (see docstring)
             yy = yy + np.random.uniform(*NOISE_SCALE) * _sample_noise(N_GRID)
             yy = smooth_sim(np.clip(yy, 0, None))
             yy = phi_slope_drift(yy)

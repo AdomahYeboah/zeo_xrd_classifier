@@ -1,25 +1,5 @@
 """
-ZEO-XRD MULTISCALE METRIC A-CNN (MAIN SCRIPT)
-
-FAU / FER / LTA / MFI framework identification from powder XRD patterns.
-
-Mirrors the role of ``space_group_a_CNN.py`` in the autoXRD package layout and
-ports the original ``zeolite_cnn_multiscale.py`` behaviour with one structural
-change: all paths and hyper-parameters live in ``config.py`` (env-overridable)
-and preprocessing / augmentation / visualisation live in sibling modules.
-
-Architecture
-stem Conv1D(32,7), then MultiScale x3 (parallel k=3,7,15,31 + residual),
-cam_conv Conv1D(192,3), GAP, Dense(128), L2-normalised cosine logits x18,
-softmax.  Trained with 5-fold CV on the simulated domain, then (optionally)
-fine-tuned on experimental anchors.
-
-The five physics-driven design decisions are preserved:
-  * anti-aliased resampling in preprocess_exp      (zeolite_preproc)
-  * phi_resample_jitter aliasing augmentation      (zeolite_preproc)
-  * diagnose_exp_resolution  (here)
-  * load_xy anti-alias                              (zeolite_preproc)
-  * experimental-domain Grad-CAM                    (zeolite_vis)
+FAU / FER / LTA / MFI zeolite framework identification from powder XRD patterns.
 """
 
 import logging
@@ -53,14 +33,8 @@ from zeolite_vis import (
 log = logging.getLogger("zeolite_cnn")
 
 
-# EXPERIMENTAL RESOLUTION DIAGNOSTIC
-
 def diagnose_exp_resolution(test_dir=EXP_TEST_DIR):
-    """
-    Audit the native 2θ step of every experimental .xy file.
-    Logs a histogram of step sizes so the user can confirm preprocess_exp's
-    anti-alias branch is engaged and no pattern is being decimated silently.
-    """
+    """Log a histogram of the native 2θ step sizes of experimental .xy files."""
     from glob import glob
     import collections
     steps = []
@@ -78,8 +52,6 @@ def diagnose_exp_resolution(test_dir=EXP_TEST_DIR):
         log.info("   %-8.3f  x%-5d%s", step_sz, n, flag)
 
 
-# NETWORK
-
 def _multiscale_block(x, filters, ks, name):
     branches = [tf.keras.layers.Conv1D(filters, k, padding="same",
                                        activation="relu", name=f"{name}_k{k}")(x)
@@ -90,17 +62,14 @@ def _multiscale_block(x, filters, ks, name):
 def build_multiscale_metric_acnn(input_len=N_GRID):
     inp = tf.keras.layers.Input(shape=(input_len, 1), name="xrd_input")
 
-    # stem
     x = tf.keras.layers.Conv1D(32, 7, padding="same", activation="relu",
                                kernel_regularizer=tf.keras.regularizers.l2(L2_REG),
                                name="stem")(inp)
 
-    # multiscale blocks (parallel k = 3, 7, 15, 31)
     x = _multiscale_block(x, 64,  [3, 7, 15, 31], "ms1")
     x = _multiscale_block(x, 128, [3, 7, 15, 31], "ms2")
     x = _multiscale_block(x, 192, [3, 7, 15, 31], "ms3")
 
-    # CAM layer
     cam = tf.keras.layers.Conv1D(192, 3, padding="same", activation="relu",
                                  kernel_regularizer=tf.keras.regularizers.l2(L2_REG),
                                  name="cam_conv")(x)
@@ -109,7 +78,7 @@ def build_multiscale_metric_acnn(input_len=N_GRID):
     x = tf.keras.layers.Lambda(lambda t: tf.math.l2_normalize(t, axis=1),
                                name="l2_norm")(x)
 
-    # cosine logits to 18-way embedding space
+    # Dense(18) embedding + L2-normalised cosine logits
     logits = tf.keras.layers.Dense(18, name="cosine_logits")(x)
     logits_norm = tf.keras.layers.Lambda(lambda t: tf.math.l2_normalize(t, axis=1),
                                          name="cosine_norm")(logits)
@@ -119,8 +88,6 @@ def build_multiscale_metric_acnn(input_len=N_GRID):
     model = tf.keras.Model(inp, out, name="multiscale_metric_acnn")
     return model
 
-
-# TRAINING
 
 def train_one_model(model, X, y, tag, lr=1e-3, epochs=EPOCHS,
                     class_weight=None, es_patience=PATIENCE):
@@ -144,11 +111,7 @@ def train_one_model(model, X, y, tag, lr=1e-3, epochs=EPOCHS,
 
 def fine_tune_on_experimental_anchors(model, X_exp, y_exp, encoder,
                                       base_lr=FINE_TUNE_LR):
-    """
-    Optional post-training adaptation on experimental anchors.
-    Balances each class to FINE_TUNE_EXP_PER_CLASS and replays
-    SIM_REPLAY_PER_CLASS simulated patterns per class to avoid forgetting.
-    """
+    """Fine-tune on a class-balanced subset of augmented experimental anchors."""
     X_aug, y_aug = augment_experimental_set(X_exp, y_exp, encoder)
     fw_to_idx = {fw: i for i, fw in enumerate(TARGET_FRAMEWORKS)}
     picks = []
@@ -172,8 +135,6 @@ def fine_tune_on_experimental_anchors(model, X_exp, y_exp, encoder,
     return model
 
 
-# EVALUATION
-
 def evaluate_model(model, X, y, tag):
     y_pred = model.predict(X, batch_size=BATCH, verbose=0)
     y_idx  = np.argmax(y_pred, axis=1)
@@ -181,8 +142,6 @@ def evaluate_model(model, X, y, tag):
     log.info("[%s] accuracy = %.4f", tag, acc)
     return acc, y_pred
 
-
-# 5-FOLD CV + FINAL MODEL + CAM
 
 def run_experimental_kfold(model, X_sim, y_sim, X_exp, y_exp):
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=3)
@@ -192,9 +151,7 @@ def run_experimental_kfold(model, X_sim, y_sim, X_exp, y_exp):
         X_tr = X_sim[tr_idx]; y_tr = y_sim[tr_idx]
         X_va = X_sim[va_idx]; y_va = y_sim[va_idx]
 
-        # sim augmentation
         X_tr_aug, y_tr_aug = augment_simulated_set(X_tr, y_tr, None)
-        # experimental augmentation (labelled anchors)
         X_exp_aug, y_exp_aug = augment_experimental_set(X_exp, y_exp, None)
         X_tr_all = np.concatenate([X_tr_aug, X_exp_aug])
         y_tr_all = np.concatenate([y_tr_aug, y_exp_aug])
@@ -218,7 +175,6 @@ def train_final_and_cam():
     model = build_multiscale_metric_acnn()
     model.summary()
 
-    # data: simulated target patterns + unlabelled pool
     iza_xy = ensure_xy(IZA_CIF_DIR, IZA_XY_TMP, IZA_XY_DRIVE, "IZA CIFs", WORKER_CIF)
     cod_xy = ensure_xy(COD_CIF_DIR, COD_XY_TMP, COD_XY_DRIVE, "COD CIFs", WORKER_CIF)
     X_sim, y_sim_str = load_target_patterns(iza_xy + cod_xy)
@@ -227,13 +183,12 @@ def train_final_and_cam():
     y_sim = encoder.transform(y_sim_str)
     log.info("simulated target patterns: %s", dict(zip(*np.unique(y_sim_str, return_counts=True))))
 
-    # unlabelled experimental pool feeds the noise / envelope pools
+    # unlabelled pool feeds the noise / envelope pools
     from glob import glob
     unlabelled = [preprocess_exp(p) for p in sorted(glob(f"{UNLABELED_DIR}/*.xy"))]
     build_pools(unlabelled)
     log.info("unlabelled pool: %d patterns", len(unlabelled))
 
-    # data: labelled experimental anchors + test
     X_exp, y_exp_str, exp_paths = load_labeled_exp(EXP_TRAIN_DIR)
     y_exp = encoder.transform(y_exp_str)
     log.info("experimental anchors: %s", dict(zip(*np.unique(y_exp_str, return_counts=True))))
@@ -242,10 +197,8 @@ def train_final_and_cam():
     y_test = encoder.transform(y_test_str)
     log.info("experimental test: %s", dict(zip(*np.unique(y_test_str, return_counts=True))))
 
-    # resolution audit
     diagnose_exp_resolution()
 
-    # final training on all simulated + experimental anchors
     X_sim_aug, y_sim_aug = augment_simulated_set(X_sim, y_sim, encoder)
     X_exp_aug, y_exp_aug = augment_experimental_set(X_exp, y_exp, encoder)
     X_all = np.concatenate([X_sim_aug, X_exp_aug])
@@ -254,15 +207,12 @@ def train_final_and_cam():
     train_one_model(model, X_all, y_all, "multiscale_final",
                     class_weight=CLASS_WEIGHT)
 
-    # experimental fine-tuning (optional)
     if FINE_TUNE_ON_EXPERIMENTAL_ANCHORS:
         model = fine_tune_on_experimental_anchors(model, X_exp, y_exp, encoder)
 
-    # evaluation
     _, _ = evaluate_model(model, X_test, y_test, "final/test")
     _, _ = evaluate_model(model, X_exp, y_exp, "final/anchors")
 
-    # Grad-CAM
     X_by_class = {fw: X_sim[y_sim == encoder.transform([fw])[0]] for fw in TARGET_FRAMEWORKS}
     plot_average_cams(model, X_by_class, CAM_DIR)
     plot_average_cams_experimental(model, X_exp, y_exp, CAM_DIR)
@@ -273,7 +223,7 @@ def train_final_and_cam():
 
 
 def main():
-    try:  # Google Colab: mount Drive if available; harmless elsewhere
+    try:  # mount Drive when running on Colab
         from google.colab import drive
         drive.mount("/content/drive")
     except ImportError:

@@ -1,34 +1,8 @@
 """
-ZEO-XRD CONFIGURATION
+Central configuration for the zeolite XRD framework classifier.
 
-Centralised configuration for the zeolite XRD framework classifier
-(FAU / FER / LTA / MFI).  This is the single edit point for every path and
-hyper-parameter, mirroring the layout of the autoXRD package.
-
-All data paths default to the original Google Colab / Google Drive layout
-used by ``zeolite_cnn_multiscale.py`` but can be overridden with environment
-variables so the pipeline runs locally without code edits:
-
-    BASE          -> ZEO_XRD_BASE
-    IZA_CIF_DIR   -> ZEO_XRD_IZA_CIF_DIR
-    COD_CIF_DIR   -> ZEO_XRD_COD_CIF_DIR
-    UNLABELED_DIR -> ZEO_XRD_UNLABELED_DIR
-    EXP_TEST_DIR  -> ZEO_XRD_EXP_TEST_DIR
-    EXP_TRAIN_DIR -> ZEO_XRD_EXP_TRAIN_DIR
-    IZA_XY_DRIVE  -> ZEO_XRD_IZA_XY_DRIVE
-    COD_XY_DRIVE  -> ZEO_XRD_COD_XY_DRIVE
-    IZA_XY_TMP    -> ZEO_XRD_IZA_XY_TMP
-    COD_XY_TMP    -> ZEO_XRD_COD_XY_TMP
-    OUT_DIR       -> ZEO_XRD_OUT_DIR
-    WORKER_CIF    -> ZEO_XRD_WORKER_CIF
-
-Example (local run on Windows):
-
-    set ZEO_XRD_BASE=D:\\IT\\project_exp
-    set ZEO_XRD_IZA_XY_TMP=D:\\IT\\tmp\\iza_xy
-    set ZEO_XRD_COD_XY_TMP=D:\\IT\\tmp\\cod_xy
-    set ZEO_XRD_WORKER_CIF=D:\\IT\\simulate_cif_worker.py
-    python zeolite_cnn_multiscale.py
+All paths can be overridden with environment variables prefixed ZEO_XRD_,
+e.g. set ZEO_XRD_BASE=D:\\IT\\project_exp before running.
 """
 
 import logging
@@ -45,20 +19,14 @@ def _env(name, default):
     return os.environ.get(name, default)
 
 
-# TARGET FRAMEWORKS & 2θ GRID
-
 TARGET_FRAMEWORKS = ["FAU", "FER", "LTA", "MFI"]
 
 TTH_MIN, TTH_MAX, STEP = 5.0, 50.0, 0.05
 FWHM        = 0.2
 RANDOM_SEED = 42
 
-# AUGMENTATION COUNTS
-
 N_AUG_SIM_BY_FW = {"FAU": 18, "FER": 34, "LTA": 30, "MFI": 24}
 N_AUG_EXP_BY_FW = {"FAU": 24, "FER": 54, "LTA": 42, "MFI": 30}
-
-# SIGNAL PROCESSING
 
 SHIFT_MAX    = 0.08
 NOISE_SCALE  = (0.02, 0.075)
@@ -68,15 +36,11 @@ ENV_SG_WIN   = 101
 NOISE_SG_WIN = 51
 SNIP_ITER    = 20
 
-# CNN TRAINING
-
 EPOCHS       = 100
 PATIENCE     = 25
 BATCH        = 64
 L2_REG       = 1e-4
 CLASS_WEIGHT = {0: 0.95, 1: 3.00, 2: 1.85, 3: 1.75}
-
-# FINE-TUNING  (set True to adapt on experimental anchors after main training)
 
 FINE_TUNE_ON_EXPERIMENTAL_ANCHORS = False
 FINE_TUNE_EPOCHS        = 12
@@ -84,8 +48,6 @@ FINE_TUNE_LR            = 2e-5
 FINE_TUNE_EXP_PER_CLASS = 120
 SIM_REPLAY_PER_CLASS    = 240
 FINE_TUNE_CLASS_WEIGHT  = {0: 1.0, 1: 1.15, 2: 1.10, 3: 1.0}
-
-# PATHS - configurable via environment variables (see module docstring)
 
 BASE          = _env("ZEO_XRD_BASE", "/content/drive/MyDrive/project_exp")
 IZA_CIF_DIR   = _env("ZEO_XRD_IZA_CIF_DIR",   f"{BASE}/IZA_Frameworks")
@@ -101,13 +63,10 @@ OUT_DIR       = _env("ZEO_XRD_OUT_DIR",       f"{BASE}/multiscale_output")
 MODEL_DIR     = f"{OUT_DIR}/models"
 CAM_DIR       = f"{OUT_DIR}/cam_plots"
 
-# Simulation worker script (subprocess), configurable for local runs
 WORKER_CIF    = _env("ZEO_XRD_WORKER_CIF",    "/content/simulate_cif_worker.py")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(CAM_DIR,   exist_ok=True)
-
-# DERIVED QUANTITIES & SEEDING
 
 TTH_GRID  = np.arange(TTH_MIN, TTH_MAX + STEP, STEP)
 SIGMA_DEG = FWHM / 2.3548
@@ -118,8 +77,7 @@ random.seed(RANDOM_SEED)
 tf.random.set_seed(RANDOM_SEED)
 
 
-# FRAMEWORK PHYSICS - physics-informed augmentation priors per framework
-
+# Physics-informed augmentation priors per framework.
 FRAMEWORK_PHYSICS = {
     "FAU": {
         "broadening":    {"fwhm_min": 0.42, "fwhm_max": 0.75, "eta_min": 0.30, "eta_max": 0.80},
