@@ -9,7 +9,7 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.preprocessing import LabelEncoder
 
 from config import (
@@ -24,6 +24,7 @@ from config import (
 from zeolite_preproc import (
     augment_experimental_set, augment_simulated_set, build_pools,
     ensure_xy, load_labeled_exp, load_target_patterns, preprocess_exp,
+    smooth_sim,
 )
 from zeolite_vis import (
     compare_cam_domains, plot_average_cams, plot_average_cams_experimental,
@@ -106,7 +107,7 @@ def build_multiscale_metric_acnn(input_len=N_GRID):
     return model
 
 
-def train_one_model(model, X, y, tag, lr=3e-4, epochs=EPOCHS,
+def train_one_model(model, X, y, X_val, y_val, tag, lr=3e-4, epochs=EPOCHS,
                     class_weight=None, es_patience=PATIENCE):
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
@@ -120,7 +121,7 @@ def train_one_model(model, X, y, tag, lr=3e-4, epochs=EPOCHS,
         tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=es_patience,
                                          restore_best_weights=True, verbose=1),
     ]
-    model.fit(X, y, batch_size=BATCH, epochs=epochs, validation_split=0.2,
+    model.fit(X, y, batch_size=BATCH, epochs=epochs, validation_data=(X_val, y_val),
               callbacks=callbacks, class_weight=class_weight, verbose=1)
     model.save(os.path.join(MODEL_DIR, f"{tag}.keras"))
     return model
@@ -161,29 +162,24 @@ def evaluate_model(model, X, y, tag):
 
 
 def run_experimental_kfold(model, X_sim, y_sim, X_exp, y_exp):
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=3)
-    fold_accs, fold_exp_accs = [], []
-    for fold, (tr_idx, va_idx) in enumerate(skf.split(X_sim, y_sim)):
-        log.info("Fold %d/5", fold + 1)
-        X_tr = X_sim[tr_idx]; y_tr = y_sim[tr_idx]
-        X_va = X_sim[va_idx]; y_va = y_sim[va_idx]
-
-        X_tr_aug, y_tr_aug = augment_simulated_set(X_tr, y_tr, None)
-        X_exp_aug, y_exp_aug = augment_experimental_set(X_exp, y_exp, None)
-        X_tr_all = np.concatenate([X_tr_aug, X_exp_aug])
-        y_tr_all = np.concatenate([y_tr_aug, y_exp_aug])
+    kf = KFold(n_splits=min(5, len(X_exp)), shuffle=True, random_state=3)
+    fold_exp_accs = []
+    for fold, (tr_idx, va_idx) in enumerate(kf.split(X_exp, y_exp)):
+        log.info("Fold %d/%d", fold + 1, kf.n_splits)
+        X_sim_aug, y_sim_aug = augment_simulated_set(X_sim, y_sim, None)
+        X_exp_aug, y_exp_aug = augment_experimental_set(X_exp[tr_idx], y_exp[tr_idx], None)
+        X_tr_all = np.concatenate([X_sim_aug, X_exp_aug])
+        y_tr_all = np.concatenate([y_sim_aug, y_exp_aug])
+        X_va = X_exp[va_idx]; y_va = y_exp[va_idx]
 
         fold_model = tf.keras.models.clone_model(model)
         fold_model.set_weights(model.get_weights())
-        train_one_model(fold_model, X_tr_all, y_tr_all, f"fold{fold + 1}",
-                        class_weight=CLASS_WEIGHT)
+        train_one_model(fold_model, X_tr_all, y_tr_all, X_va, y_va,
+                        f"fold{fold + 1}", class_weight=CLASS_WEIGHT)
 
-        acc, _ = evaluate_model(fold_model, X_va, y_va, f"fold{fold + 1}/val")
-        exp_acc, _ = evaluate_model(fold_model, X_exp, y_exp, f"fold{fold + 1}/exp")
-        fold_accs.append(acc)
+        exp_acc, _ = evaluate_model(fold_model, X_va, y_va, f"fold{fold + 1}/exp")
         fold_exp_accs.append(exp_acc)
 
-    log.info("CV simulated acc: %s  mean=%.4f", np.round(fold_accs, 4), np.mean(fold_accs))
     log.info("CV experimental acc: %s  mean=%.4f",
              np.round(fold_exp_accs, 4), np.mean(fold_exp_accs))
 
@@ -216,12 +212,16 @@ def train_final_and_cam():
 
     diagnose_exp_resolution()
 
-    X_sim_aug, y_sim_aug = augment_simulated_set(X_sim, y_sim, encoder)
+    tr_idx, vl_idx = train_test_split(np.arange(len(X_sim)), test_size=0.2,
+                                       random_state=RANDOM_SEED, stratify=y_sim)
+    X_sim_aug, y_sim_aug = augment_simulated_set(X_sim[tr_idx], y_sim[tr_idx], encoder)
     X_exp_aug, y_exp_aug = augment_experimental_set(X_exp, y_exp, encoder)
     X_all = np.concatenate([X_sim_aug, X_exp_aug])
     y_all = np.concatenate([y_sim_aug, y_exp_aug])
+    X_vl = np.array([smooth_sim(x) for x in X_sim[vl_idx]], dtype=np.float32)
+    y_vl = y_sim[vl_idx]
     log.info("final training set: %d patterns", len(X_all))
-    train_one_model(model, X_all, y_all, "multiscale_final",
+    train_one_model(model, X_all, y_all, X_vl, y_vl, "multiscale_final",
                     class_weight=CLASS_WEIGHT)
 
     if FINE_TUNE_ON_EXPERIMENTAL_ANCHORS:
@@ -232,8 +232,8 @@ def train_final_and_cam():
 
     X_by_class = {fw: X_sim[y_sim == encoder.transform([fw])[0]] for fw in TARGET_FRAMEWORKS}
     plot_average_cams(model, X_by_class, CAM_DIR)
-    plot_average_cams_experimental(model, X_exp, y_exp, CAM_DIR)
-    compare_cam_domains(model, X_by_class, X_exp, y_exp, CAM_DIR)
+    plot_average_cams_experimental(model, X_test, y_test, CAM_DIR)
+    compare_cam_domains(model, X_by_class, X_test, y_test, CAM_DIR)
     plot_class_cam_gallery(model, X_by_class, CAM_DIR)
     y_test_pred = model.predict(X_test, batch_size=BATCH, verbose=0)
     plot_test_cams(model, X_test, y_test, y_test_pred, CAM_DIR)
