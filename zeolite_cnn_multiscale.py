@@ -52,44 +52,61 @@ def diagnose_exp_resolution(test_dir=EXP_TEST_DIR):
         log.info("   %-8.3f  x%-5d%s", step_sz, n, flag)
 
 
-def _multiscale_block(x, filters, ks, name):
-    branches = [tf.keras.layers.Conv1D(filters, k, padding="same",
-                                       activation="relu", name=f"{name}_k{k}")(x)
-                for k in ks]
-    return tf.keras.layers.Concatenate(name=f"{name}_concat")(branches)
+def _ms_block(x, filters, name, dr=0.08):
+    reg = tf.keras.regularizers.l2(L2_REG)
+    branches = []
+    for k in (3, 7, 15, 31):
+        b = tf.keras.layers.Conv1D(filters, k, padding="same",
+                                   kernel_regularizer=reg, name=f"{name}_k{k}")(x)
+        b = tf.keras.layers.LayerNormalization(name=f"{name}_ln{k}")(b)
+        b = tf.keras.layers.Activation("relu", name=f"{name}_relu{k}")(b)
+        branches.append(b)
+    y = tf.keras.layers.Concatenate(name=f"{name}_cat")(branches)
+    y = tf.keras.layers.Conv1D(filters * 2, 1, padding="same",
+                               kernel_regularizer=reg, name=f"{name}_mix")(y)
+    y = tf.keras.layers.LayerNormalization(name=f"{name}_mix_ln")(y)
+    skip = x if int(x.shape[-1]) == filters * 2 else tf.keras.layers.Conv1D(
+        filters * 2, 1, padding="same", kernel_regularizer=reg, name=f"{name}_skip")(x)
+    y = tf.keras.layers.Add(name=f"{name}_add")([skip, y])
+    y = tf.keras.layers.Activation("relu", name=f"{name}_out_relu")(y)
+    y = tf.keras.layers.SpatialDropout1D(dr, name=f"{name}_drop")(y)
+    return y
 
 
 def build_multiscale_metric_acnn(input_len=N_GRID):
+    reg = tf.keras.regularizers.l2(L2_REG)
     inp = tf.keras.layers.Input(shape=(input_len, 1), name="xrd_input")
 
-    x = tf.keras.layers.Conv1D(32, 7, padding="same", activation="relu",
-                               kernel_regularizer=tf.keras.regularizers.l2(L2_REG),
-                               name="stem")(inp)
+    x = tf.keras.layers.Conv1D(32, 7, padding="same", kernel_regularizer=reg,
+                               name="stem_conv")(inp)
+    x = tf.keras.layers.LayerNormalization(name="stem_ln")(x)
+    x = tf.keras.layers.Activation("relu", name="stem_relu")(x)
 
-    x = _multiscale_block(x, 64,  [3, 7, 15, 31], "ms1")
-    x = _multiscale_block(x, 128, [3, 7, 15, 31], "ms2")
-    x = _multiscale_block(x, 192, [3, 7, 15, 31], "ms3")
+    x = _ms_block(x, 24, "ms1", dr=0.05)
+    x = _ms_block(x, 32, "ms2", dr=0.07)
+    x = _ms_block(x, 48, "ms3", dr=0.10)
 
-    cam = tf.keras.layers.Conv1D(192, 3, padding="same", activation="relu",
-                                 kernel_regularizer=tf.keras.regularizers.l2(L2_REG),
-                                 name="cam_conv")(x)
-    x = tf.keras.layers.GlobalAveragePooling1D(name="gap")(cam)
-    x = tf.keras.layers.Dense(128, activation="relu", name="embed_dense")(x)
-    x = tf.keras.layers.Lambda(lambda t: tf.math.l2_normalize(t, axis=1),
-                               name="l2_norm")(x)
-
-    # Dense(18) embedding + L2-normalised cosine logits
-    logits = tf.keras.layers.Dense(18, name="cosine_logits")(x)
-    logits_norm = tf.keras.layers.Lambda(lambda t: tf.math.l2_normalize(t, axis=1),
-                                         name="cosine_norm")(logits)
-    out = tf.keras.layers.Dense(len(TARGET_FRAMEWORKS), activation="softmax",
-                                name="softmax")(logits_norm)
+    x = tf.keras.layers.Conv1D(192, 3, padding="same", kernel_regularizer=reg,
+                               name="cam_conv")(x)
+    x = tf.keras.layers.BatchNormalization(name="cam_bn")(x)
+    x = tf.keras.layers.Activation("relu", name="cam_relu")(x)
+    x = tf.keras.layers.Dropout(0.25, name="cam_drop")(x)
+    x = tf.keras.layers.GlobalAveragePooling1D(name="gap")(x)
+    x = tf.keras.layers.Dense(128, activation="relu", kernel_regularizer=reg,
+                              name="emb_dense")(x)
+    x = tf.keras.layers.Dropout(0.25, name="emb_drop")(x)
+    emb = tf.keras.layers.Lambda(lambda t: tf.math.l2_normalize(t, axis=1),
+                                 name="l2_emb")(x)
+    logits = tf.keras.layers.Dense(len(TARGET_FRAMEWORKS), use_bias=False,
+                                   kernel_regularizer=reg, name="cos_logits")(emb)
+    logits = tf.keras.layers.Lambda(lambda t: 18.0 * t, name="logit_scale")(logits)
+    out = tf.keras.layers.Activation("softmax", name="class_probs")(logits)
 
     model = tf.keras.Model(inp, out, name="multiscale_metric_acnn")
     return model
 
 
-def train_one_model(model, X, y, tag, lr=1e-3, epochs=EPOCHS,
+def train_one_model(model, X, y, tag, lr=3e-4, epochs=EPOCHS,
                     class_weight=None, es_patience=PATIENCE):
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
