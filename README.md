@@ -45,7 +45,7 @@ _write_worker(WORKER_CIF)
 
 ```
 python zeolite_cnn_multiscale.py            # train the final model and produce Grad-CAM plots
-python zeolite_cnn_multiscale.py --kfold    # 5-fold cross-validation on the simulated domain
+python zeolite_cnn_multiscale.py --kfold    # 5-fold cross-validation on the experimental anchors
 ```
 
 Both modes log per-class pattern counts, a step-size histogram of the experimental files, and accuracy after each fold or training run.
