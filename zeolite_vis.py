@@ -37,7 +37,7 @@ def compute_cam(model, x, class_idx=None, layer_name="cam_conv"):
         loss = logits[:, class_idx]
     grads = tape.gradient(loss, conv_out)
     weights = tf.reduce_mean(grads, axis=1)
-    cam = tf.reduce_sum(tf.multiply(weights[:, :, None], conv_out), axis=-1)[0].numpy()
+    cam = tf.reduce_sum(tf.multiply(weights[:, None, :], conv_out), axis=-1)[0].numpy()
     cam = np.clip(cam, 0, None)
     cam = np.interp(TTH_GRID, np.linspace(TTH_GRID[0], TTH_GRID[-1], len(cam)), cam)
     m = cam.max()
