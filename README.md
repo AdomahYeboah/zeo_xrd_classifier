@@ -12,6 +12,8 @@ Classifies powder XRD patterns of zeolites into four framework types (FAU, FER, 
 | `zeolite_cnn_multiscale.py` | Model definition, training loops, evaluation. Run this file. |
 | `calibration/calibrate_S1S2_globals.py` | Derives S1 broadening/amorphous ranges and rescale quantiles from training patterns vs IZA references. |
 | `calibration/fit_caglioti.py` | Constrained Caglioti fit (binned medians + NNLS + FIT_OK gate) from unlabelled patterns. |
+| `calibration/resimulate_texture.py` | Re-simulates patterns with structure-side March-Dollase texture into separate tex dirs. |
+| `zeolite_baselines.py` | Paper baseline classifiers: a-CNN port plus RF, SVM, GBC with shared protocol. |
 | `tests/` | Regression tests runnable without TensorFlow. |
 
 ## Requirements
