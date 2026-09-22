@@ -25,8 +25,8 @@ TTH_MIN, TTH_MAX, STEP = 5.0, 50.0, 0.05
 FWHM        = 0.2
 RANDOM_SEED = 42
 
-N_AUG_SIM_BY_FW = {"FAU": 18, "FER": 34, "LTA": 30, "MFI": 24}
-N_AUG_EXP_BY_FW = {"FAU": 24, "FER": 54, "LTA": 42, "MFI": 30}
+N_AUG_SIM = 26
+N_AUG_EXP = 38
 
 SHIFT_MAX    = 0.08
 NOISE_SCALE  = (0.02, 0.075)
@@ -70,54 +70,19 @@ random.seed(RANDOM_SEED)
 tf.random.set_seed(RANDOM_SEED)
 
 
-# Physics-informed augmentation priors per framework.
-FRAMEWORK_PHYSICS = {
-    "FAU": {
-        "broadening":    {"fwhm_min": 0.42, "fwhm_max": 0.75, "eta_min": 0.30, "eta_max": 0.80},
-        "orientation":   {"r_min": 0.78, "r_max": 0.97},
-        "amorphous":     {"center_mean": 30.6, "center_std": 3.8, "amp_min": 0.05, "amp_max": 0.60,
-                          "width_sigma_min": 4.0, "width_sigma_max": 8.0, "apply_prob": 0.82},
-        "amorphous2":    None, "low_suppress": None, "hi_amplify": None,
-        "low_angle_hump": {"center_mean": 8.0, "center_std": 1.5, "amp_min": 0.05, "amp_max": 0.40,
-                           "width_sigma_min": 2.0, "width_sigma_max": 4.5, "apply_prob": 0.35},
-        "mfi_triplet_boost": None, "fer_diagnostic_boost": None,
-    },
-    "FER": {
-        "broadening":    {"fwhm_min": 0.76, "fwhm_max": 1.91, "eta_min": 0.00, "eta_max": 0.40},
-        "orientation":   {"r_min": 0.47, "r_max": 0.97},
-        "amorphous":     {"center_mean": 22.6, "center_std": 2.0, "amp_min": 0.10, "amp_max": 0.37,
-                          "width_sigma_min": 2.5, "width_sigma_max": 4.5, "apply_prob": 0.75},
-        "amorphous2": None, "low_suppress": None,
-        "hi_amplify":    {"center": 25.0, "sigma": 4.0, "factor_min": 1.5, "factor_max": 3.5, "apply_prob": 0.55},
-        "low_angle_hump": None, "mfi_triplet_boost": None,
-        "fer_diagnostic_boost": {"centers": [9.3, 22.1, 25.2], "sigma": 0.34,
-                                  "factor_min": 1.15, "factor_max": 2.10, "apply_prob": 0.65},
-    },
-    "LTA": {
-        "broadening":    {"fwhm_min": 0.40, "fwhm_max": 2.40, "eta_min": 0.00, "eta_max": 0.50},
-        "orientation":   {"r_min": 0.20, "r_max": 0.97},
-        "amorphous":     {"center_mean": 13.0, "center_std": 1.0, "amp_min": 0.15, "amp_max": 0.80,
-                          "width_sigma_min": 1.8, "width_sigma_max": 2.0, "apply_prob": 0.85},
-        "amorphous2":    {"center_mean": 15.0, "center_std": 1.5, "amp_min": 0.05, "amp_max": 0.30,
-                          "width_sigma_min": 1.5, "width_sigma_max": 2.5, "apply_prob": 0.50},
-        "low_suppress": None, "hi_amplify": None,
-        "low_angle_hump": {"center_mean": 9.0, "center_std": 1.2, "amp_min": 0.10, "amp_max": 0.70,
-                           "width_sigma_min": 1.5, "width_sigma_max": 3.5, "apply_prob": 0.50},
-        "mfi_triplet_boost": None, "fer_diagnostic_boost": None,
-    },
-    "MFI": {
-        "broadening":    {"fwhm_min": 0.35, "fwhm_max": 1.55, "eta_min": 0.00, "eta_max": 0.55},
-        "orientation":   {"r_min": 0.04, "r_max": 0.97},
-        "amorphous":     {"center_mean": 22.5, "center_std": 3.2, "amp_min": 0.00, "amp_max": 0.18,
-                          "width_sigma_min": 3.0, "width_sigma_max": 7.5, "apply_prob": 0.55},
-        "amorphous2": None,
-        "low_suppress":  {"suppress_start_deg": 5.0, "suppress_end_deg": 16.0,
-                          "suppress_min": 0.02, "suppress_max": 0.35, "apply_prob": 0.78},
-        "hi_amplify": None,
-        "low_angle_hump": {"center_mean": 8.4, "center_std": 0.9, "amp_min": 0.02, "amp_max": 0.22,
-                           "width_sigma_min": 1.2, "width_sigma_max": 3.0, "apply_prob": 0.28},
-        "mfi_triplet_boost": {"centers": [7.9, 8.9, 23.1, 23.9, 24.4], "sigma": 0.42,
-                               "factor_min": 1.15, "factor_max": 2.20, "apply_prob": 0.55},
-        "fer_diagnostic_boost": None,
-    },
+# Class-blind augmentation governing set (S1S3S4S5-effective).
+# Calibrated against experimental training patterns vs idealized IZA
+# references (median over 4 comparisons); see calibrate_S1S2_globals.py.
+EFF = {
+    "broadening": {"fwhm_min": 1.41, "fwhm_max": 3.0,
+                   "eta_min": 0.3, "eta_max": 0.8},
+    "strain_eps": 0.002,
+    "amorphous": {"center_min": 12.9, "center_max": 31.2,
+                  "center_note": "interquartile interval of training-pattern bg positions; single hump",
+                  "center_std": 3.0,
+                  "amp_min": 0.03, "amp_max": 0.99,
+                  "sig_min": 1.5, "sig_max": 8.0, "apply_prob": 1.0},
+    "rescale": {"factor_min": 0.47, "factor_max": 2.01, "apply_prob": 0.85},
+    "rescale_topk": 3,
+    "caglioti": [1.2892, 0.0, 0.4183],
 }
