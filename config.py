@@ -42,13 +42,6 @@ BATCH        = 64
 L2_REG       = 1e-4
 CLASS_WEIGHT = {0: 0.95, 1: 3.00, 2: 1.85, 3: 1.75}
 
-FINE_TUNE_ON_EXPERIMENTAL_ANCHORS = False
-FINE_TUNE_EPOCHS        = 12
-FINE_TUNE_LR            = 2e-5
-FINE_TUNE_EXP_PER_CLASS = 120
-SIM_REPLAY_PER_CLASS    = 240
-FINE_TUNE_CLASS_WEIGHT  = {0: 1.0, 1: 1.15, 2: 1.10, 3: 1.0}
-
 BASE          = _env("ZEO_XRD_BASE", "/content/drive/MyDrive/project_exp")
 IZA_CIF_DIR   = _env("ZEO_XRD_IZA_CIF_DIR",   f"{BASE}/IZA_Frameworks")
 COD_CIF_DIR   = _env("ZEO_XRD_COD_CIF_DIR",   f"{BASE}/cod_cifs")
