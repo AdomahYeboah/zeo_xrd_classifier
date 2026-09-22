@@ -11,15 +11,21 @@ import textwrap
 from glob import glob
 
 import numpy as np
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.signal import find_peaks, find_peaks_cwt, savgol_filter
 from sklearn.preprocessing import LabelEncoder
 
 from config import (
     COD_XY_DRIVE,
     COD_XY_TMP,
+    EFF,
     ENV_SG_WIN,
     FWHM,
+    IZA_XY_DRIVE,
+    IZA_XY_TMP,
+    N_AUG_EXP,
+    N_AUG_SIM,
+    N_GRID,
     IZA_XY_DRIVE,
     IZA_XY_TMP,
     N_GRID,
@@ -36,7 +42,6 @@ from config import (
     TTH_MAX,
     TTH_MIN,
     WORKER_CIF,
-    FRAMEWORK_PHYSICS,
 )
 
 log = logging.getLogger("zeolite_preproc")
@@ -270,7 +275,7 @@ def _sample_noise(n):
 
 def build_pools(unlabeled_patterns):
     """Populate the module-level noise and envelope pools from preprocessed
-    unlabelled patterns (consumed by augment_sim / augment_experimental_set)."""
+    unlabelled patterns (consumed by augment_pattern)."""
     global noise_pool, mult_envs
     noise_pool = _extract_noise_residuals(unlabeled_patterns)
     mult_envs  = _extract_mult_envelopes(unlabeled_patterns)
@@ -284,41 +289,6 @@ def _pseudo_voigt_kernel(fwhm_deg, eta):
     return (kernel / kernel.sum()).astype(np.float32)
 
 
-def phi_broad(y, fw):
-    bp = FRAMEWORK_PHYSICS[fw]["broadening"]
-    return np.clip(np.convolve(y,
-        _pseudo_voigt_kernel(np.random.uniform(bp["fwhm_min"], bp["fwhm_max"]),
-                              np.random.uniform(bp["eta_min"],  bp["eta_max"])),
-        mode="same"), 0, None).astype(np.float32)
-
-
-def phi_orient(y, fw):
-    op = FRAMEWORK_PHYSICS[fw]["orientation"]
-    r  = np.random.uniform(op["r_min"], op["r_max"])
-    y_sm = savgol_filter(y, 11, 3)
-    peaks = [i for i in range(1, len(y_sm)-1)
-             if y_sm[i] > y_sm[i-1] and y_sm[i] > y_sm[i+1] and y_sm[i] > 0.05]
-    if not peaks: return y
-    phi_a = np.random.uniform(0, np.pi/2, len(peaks))
-    w = (r**2 * np.cos(phi_a)**2 + np.sin(phi_a)**2 / r)**(-1.5)
-    w /= w.mean()
-    sp    = max(1, int(0.5 / STEP))
-    field = np.ones(N_GRID, dtype=np.float32)
-    for pk, ww in zip(peaks, w):
-        field += (ww - 1.0) * np.exp(-0.5 * ((np.arange(N_GRID) - pk) / sp)**2)
-    return np.clip(y * field, 0, None).astype(np.float32)
-
-
-def phi_lattice_strain(y, fw):
-    if np.random.random() > 0.65: return y
-    eps_scale = {"FAU": 0.0015, "FER": 0.0025, "LTA": 0.0035, "MFI": 0.0030}[fw]
-    x   = (TTH_GRID - TTH_MIN) / (TTH_MAX - TTH_MIN)
-    eps = np.random.normal(0.0, eps_scale) + np.random.normal(0.0, eps_scale*0.5)*(x-0.5)
-    theta   = np.deg2rad(TTH_GRID / 2.0)
-    shifted = 2.0 * np.rad2deg(np.arcsin(np.clip(np.sin(theta) / (1.0+eps), -0.9999, 0.9999)))
-    return np.interp(TTH_GRID, shifted, y, left=0.0, right=0.0).astype(np.float32)
-
-
 def phi_zero_displacement(y):
     if np.random.random() > 0.50: return y
     theta = np.deg2rad(TTH_GRID / 2.0)
@@ -327,79 +297,125 @@ def phi_zero_displacement(y):
         y, left=0.0, right=0.0).astype(np.float32)
 
 
-def _add_gaussian_hump(y, params, high_limit=TTH_MAX-2):
-    c = np.clip(np.random.normal(params["center_mean"], params["center_std"]),
-                TTH_MIN + 0.5, high_limit)
-    a = np.random.uniform(params["amp_min"],          params["amp_max"])
-    s = np.random.uniform(params["width_sigma_min"],  params["width_sigma_max"])
-    return np.clip(y + (a * np.exp(-0.5 * ((TTH_GRID - c) / s)**2)).astype(np.float32), 0, None)
+"""Class-blind augmentation pipeline (comparison-calibrated effective set).
+
+Reference implementation of the paper pipeline. Takes no class label:
+every pattern sees the same operators and ranges. Preferred orientation
+is handled structure-side (March-Dollase re-simulation into
+iza_tex_xy/cod_tex_xy); there is intentionally no per-peak operator here.
+"""
 
 
-def phi_amorph(y, fw):
-    ap = FRAMEWORK_PHYSICS[fw]["amorphous"]
-    if np.random.random() <= ap["apply_prob"]: y = _add_gaussian_hump(y, ap)
-    ap2 = FRAMEWORK_PHYSICS[fw].get("amorphous2")
-    if ap2 is not None and np.random.random() <= ap2["apply_prob"]: y = _add_gaussian_hump(y, ap2)
-    return y.astype(np.float32)
+def _gaussian_bump(y, center, amp, sig):
+    return np.clip(y + (amp * np.exp(-0.5 * ((TTH_GRID - center) / sig) ** 2)).astype(np.float32), 0, None)
 
 
-def _cosine_taper(si, ei, sv):
-    t = np.ones(N_GRID, dtype=np.float32)
-    rl = ei - si
-    if rl > 0:
-        t[:si] = sv
-        t[si:ei] = sv + (1.0-sv)*(0.5 - 0.5*np.cos(np.pi*np.arange(rl)/rl))
-    return t
-
-
-def phi_suppress(y, fw):
-    sp = FRAMEWORK_PHYSICS[fw].get("low_suppress")
-    if sp and np.random.random() < sp["apply_prob"]:
-        sv = np.random.uniform(sp["suppress_min"], sp["suppress_max"])
-        y  = y * _cosine_taper(int((sp["suppress_start_deg"]-TTH_MIN)/STEP),
-                                int((sp["suppress_end_deg"]-TTH_MIN)/STEP), sv)
-    return y.astype(np.float32)
-
-
-def phi_hi_amplify(y, fw):
-    ha = FRAMEWORK_PHYSICS[fw].get("hi_amplify")
-    if ha is None or np.random.random() > ha["apply_prob"]: return y
-    factor = np.random.uniform(ha["factor_min"], ha["factor_max"])
-    return np.clip(y * (1.0 + (factor-1.0)*np.exp(-0.5*((TTH_GRID-ha["center"])/ha["sigma"])**2)).astype(np.float32), 0, None)
-
-
-def phi_mfi_triplet_boost(y, fw):
-    mb = FRAMEWORK_PHYSICS[fw].get("mfi_triplet_boost")
-    if mb is None or np.random.random() > mb["apply_prob"]: return y
-    field = np.ones(N_GRID, dtype=np.float32)
-    for c in mb["centers"]:
-        field += (np.random.uniform(mb["factor_min"], mb["factor_max"])-1.0) * \
-                 np.exp(-0.5*((TTH_GRID-c)/mb["sigma"])**2).astype(np.float32)
-    return np.clip(y * field, 0, None).astype(np.float32)
-
-
-def phi_fer_diagnostic_boost(y, fw):
-    fb = FRAMEWORK_PHYSICS[fw].get("fer_diagnostic_boost")
-    if fb is None or np.random.random() > fb["apply_prob"]: return y
-    field = np.ones(N_GRID, dtype=np.float32)
-    for c in fb["centers"]:
-        field += (np.random.uniform(fb["factor_min"], fb["factor_max"])-1.0) * \
-                 np.exp(-0.5*((TTH_GRID-c)/fb["sigma"])**2).astype(np.float32)
-    return np.clip(y * field, 0, None).astype(np.float32)
-
-
-def phi_peak_dropout(y, fw):
-    if np.random.random() > {"FAU": 0.20, "FER": 0.25, "LTA": 0.25, "MFI": 0.42}[fw]: return y
+def caglioti_broaden(y, uvw):
+    U, V, W = uvw
     y_sm = savgol_filter(y, 11, 3)
-    peaks, _ = find_peaks(y_sm, height=max(0.04, y_sm.max()*0.08),
-                          distance=max(2, int(0.25/STEP)))
-    if not len(peaks): return y
-    mask = np.ones(N_GRID, dtype=np.float32)
-    for pk in np.random.choice(peaks, size=np.random.randint(1, min(4, len(peaks))+1), replace=False):
-        w = np.random.uniform(0.18, 0.55) / STEP
-        d = np.random.uniform(0.25, 0.85)
-        mask *= (1.0 - d * np.exp(-0.5*((np.arange(N_GRID)-pk)/w)**2)).astype(np.float32)
-    return np.clip(y * mask, 0, None).astype(np.float32)
+    pks, _ = find_peaks(y_sm, height=max(0.04, y_sm.max() * 0.08),
+                        distance=max(2, int(0.25 / STEP)))
+    if not len(pks):
+        return y
+    bl = minimum_filter1d(y, size=40).astype(np.float32)
+    pkcomp = np.clip(y - bl, 0, None)
+    out = bl.copy()
+    th = np.deg2rad(TTH_GRID / 2.0)
+    fwh = np.sqrt(np.clip(U * np.tan(th) ** 2 + V * np.tan(th) + W, 0.01, 9.0))
+    for pk in pks:
+        sig = max(float(fwh[pk]) / 2.3548, STEP / 2)
+        win = np.abs(TTH_GRID - TTH_GRID[pk]) < 5 * sig
+        out[win] += (pkcomp[pk] * np.exp(-0.5 * ((TTH_GRID[win] - TTH_GRID[pk]) / sig) ** 2)).astype(np.float32)
+    return np.clip(out, 0, None).astype(np.float32)
+
+
+def augment_pattern(y, G, is_sim):
+    """Full class-blind augmentation for one pattern (no label argument)."""
+    y = y.copy()
+    eps = G["strain_eps"]
+    if np.random.random() <= 0.65:
+        x = (TTH_GRID - TTH_MIN) / (TTH_MAX - TTH_MIN)
+        e = np.random.normal(0.0, eps) + np.random.normal(0.0, eps * 0.5) * (x - 0.5)
+        theta = np.deg2rad(TTH_GRID / 2.0)
+        shifted = 2.0 * np.rad2deg(np.arcsin(np.clip(np.sin(theta) / (1.0 + e), -0.9999, 0.9999)))
+        y = np.interp(TTH_GRID, shifted, y, left=0.0, right=0.0).astype(np.float32)
+    y = phi_zero_displacement(y)
+    if G.get("caglioti") is not None:
+        y = caglioti_broaden(y, G["caglioti"])
+    else:
+        bp = G["broadening"]
+        y = np.clip(np.convolve(y, _pseudo_voigt_kernel(
+            np.random.uniform(bp["fwhm_min"], bp["fwhm_max"]),
+            np.random.uniform(bp["eta_min"], bp["eta_max"])), mode="same"), 0, None).astype(np.float32)
+    rs = G.get("rescale")
+    if rs is not None and np.random.random() < rs["apply_prob"]:
+        y_sm = savgol_filter(y, 11, 3)
+        rpeaks, _ = find_peaks(y_sm, height=max(0.04, y_sm.max() * 0.08),
+                               distance=max(2, int(0.25 / STEP)))
+        if len(rpeaks):
+            if G.get("rescale_topk"):
+                k = min(int(G["rescale_topk"]), len(rpeaks))
+                sel = rpeaks[np.argsort(y_sm[rpeaks])[-k:]]
+            else:
+                sel = np.random.choice(rpeaks, size=np.random.randint(1, min(4, len(rpeaks)) + 1), replace=False)
+            for pk in sel:
+                f = np.random.uniform(rs["factor_min"], rs["factor_max"])
+                w = np.random.uniform(0.18, 0.55) / STEP
+                y = y * (1.0 + (f - 1.0) * np.exp(-0.5 * ((np.arange(N_GRID) - pk) / w) ** 2)).astype(np.float32)
+            y = np.clip(y, 0, None).astype(np.float32)
+    shift = np.random.uniform(-SHIFT_MAX, SHIFT_MAX)
+    y = np.interp(TTH_GRID, TTH_GRID + shift, y, left=0.0, right=0.0).astype(np.float32)
+    ap = G["amorphous"]
+    if np.random.random() < ap["apply_prob"]:
+        y = _gaussian_bump(y, np.random.uniform(ap["center_min"], ap["center_max"]),
+                           np.random.uniform(ap["amp_min"], ap["amp_max"]),
+                           np.random.uniform(ap["sig_min"], ap["sig_max"]))
+    y = phi_impurity_peaks(y)
+    if mult_envs and np.random.random() < 0.45:
+        env = mult_envs[np.random.randint(len(mult_envs))]
+        alpha = np.random.uniform(0.2, 0.75)
+        y = y * (alpha * env + (1.0 - alpha))
+    if is_sim:
+        y = phi_resample_jitter(y)
+    y = y + np.random.uniform(*NOISE_SCALE) * _sample_noise(N_GRID)
+    y = smooth_sim(np.clip(y, 0, None))
+    y = phi_slope_drift(y)
+    return y.astype(np.float32)
+
+
+def minimal_augment(y):
+    """Minimal level: comparison-range broadening plus grid shift at identical counts."""
+    bp = EFF["broadening"]
+    y = np.clip(np.convolve(y.copy(), _pseudo_voigt_kernel(
+        np.random.uniform(bp["fwhm_min"], bp["fwhm_max"]),
+        np.random.uniform(bp["eta_min"], bp["eta_max"])), mode="same"), 0, None).astype(np.float32)
+    sh = np.random.uniform(-SHIFT_MAX, SHIFT_MAX)
+    y = np.interp(TTH_GRID, TTH_GRID + sh, y, left=0.0, right=0.0).astype(np.float32)
+    return smooth_sim(np.clip(y, 0, None))
+
+
+def augment_simulated_set(X_base, y_base, encoder):
+    xs, ys = [], []
+    for x, ye in zip(X_base, y_base):
+        xs.append(smooth_sim(x))
+        ys.append(int(ye))
+        for _ in range(N_AUG_SIM):
+            xs.append(augment_pattern(x, EFF, True))
+            ys.append(int(ye))
+    return np.array(xs, dtype=np.float32), np.array(ys, dtype=np.int32)
+
+
+def augment_experimental_set(X_exp, y_exp, encoder):
+    """Augmented experimental copies (resample jitter omitted: inputs are
+    already anti-alias resampled by preprocess_exp)."""
+    xs, ys = [], []
+    for x, ye in zip(X_exp, y_exp):
+        xs.append(x)
+        ys.append(int(ye))
+        for _ in range(N_AUG_EXP):
+            xs.append(augment_pattern(x, EFF, False))
+            ys.append(int(ye))
+    return np.array(xs, dtype=np.float32), np.array(ys, dtype=np.int32)
 
 
 def phi_impurity_peaks(y):
@@ -423,12 +439,6 @@ def phi_slope_drift(y):
     return (out / out.max()).astype(np.float32) if out.max() > 0 else out.astype(np.float32)
 
 
-def phi_low_angle_hump(y, fw):
-    la = FRAMEWORK_PHYSICS[fw].get("low_angle_hump")
-    if la is None or np.random.random() > la["apply_prob"]: return y
-    return _add_gaussian_hump(y, la, 14.0)
-
-
 def phi_resample_jitter(y):
     """Simulate naive decimation artefacts (simulated patterns only;
     experimental patterns are already anti-alias resampled)."""
@@ -443,74 +453,3 @@ def phi_resample_jitter(y):
     return (yc / m).astype(np.float32) if m > 0 else yc.astype(np.float32)
 
 
-def augment_sim(x, fw):
-    """Full physics-informed augmentation for a simulated pattern."""
-    y = x.copy()
-    y = phi_lattice_strain(y, fw)
-    y = phi_zero_displacement(y)
-    y = phi_broad(y, fw)
-    y = phi_orient(y, fw)
-    y = phi_fer_diagnostic_boost(y, fw)
-    y = phi_mfi_triplet_boost(y, fw)
-    y = phi_peak_dropout(y, fw)
-    y = phi_suppress(y, fw)
-    y = phi_hi_amplify(y, fw)
-    shift = np.random.uniform(-SHIFT_MAX, SHIFT_MAX)
-    y = np.interp(TTH_GRID, TTH_GRID + shift, y, left=0.0, right=0.0).astype(np.float32)
-    y = phi_amorph(y, fw)
-    y = phi_low_angle_hump(y, fw)
-    y = phi_impurity_peaks(y)
-    if mult_envs and np.random.random() < 0.45:
-        env   = mult_envs[np.random.randint(len(mult_envs))]
-        alpha = np.random.uniform(0.2, 0.75)
-        y     = y * (alpha * env + (1.0 - alpha))
-    y = phi_resample_jitter(y)
-    y = y + np.random.uniform(*NOISE_SCALE) * _sample_noise(N_GRID)
-    y = smooth_sim(np.clip(y, 0, None))
-    y = phi_slope_drift(y)
-    return y.astype(np.float32)
-
-
-def augment_experimental_set(X_exp, y_exp, encoder):
-    """Augment labelled experimental patterns (phi_resample_jitter omitted;
-    already anti-alias resampled by preprocess_exp)."""
-    xs, ys = [], []
-    for x, ye in zip(X_exp, y_exp):
-        fw = TARGET_FRAMEWORKS[int(ye)]
-        xs.append(x); ys.append(int(ye))
-        for _ in range(N_AUG_EXP_BY_FW.get(fw, 20)):
-            yy = x.copy()
-            yy = phi_lattice_strain(yy, fw)
-            yy = phi_zero_displacement(yy)
-            yy = phi_broad(yy, fw)
-            yy = phi_orient(yy, fw)
-            yy = phi_fer_diagnostic_boost(yy, fw)
-            yy = phi_mfi_triplet_boost(yy, fw)
-            yy = phi_peak_dropout(yy, fw)
-            yy = phi_suppress(yy, fw)
-            yy = phi_hi_amplify(yy, fw)
-            shift = np.random.uniform(-SHIFT_MAX, SHIFT_MAX)
-            yy = np.interp(TTH_GRID, TTH_GRID+shift, yy, left=0.0, right=0.0).astype(np.float32)
-            yy = phi_amorph(yy, fw)
-            yy = phi_low_angle_hump(yy, fw)
-            yy = phi_impurity_peaks(yy)
-            if mult_envs and np.random.random() < 0.45:
-                env   = mult_envs[np.random.randint(len(mult_envs))]
-                alpha = np.random.uniform(0.2, 0.75)
-                yy    = yy * (alpha * env + (1.0 - alpha))
-            # phi_resample_jitter intentionally omitted (see docstring)
-            yy = yy + np.random.uniform(*NOISE_SCALE) * _sample_noise(N_GRID)
-            yy = smooth_sim(np.clip(yy, 0, None))
-            yy = phi_slope_drift(yy)
-            xs.append(yy.astype(np.float32)); ys.append(int(ye))
-    return np.array(xs, dtype=np.float32), np.array(ys, dtype=np.int32)
-
-
-def augment_simulated_set(X_base, y_base, encoder):
-    xs, ys = [], []
-    for x, ye in zip(X_base, y_base):
-        fw = TARGET_FRAMEWORKS[int(ye)]
-        xs.append(smooth_sim(x)); ys.append(int(ye))
-        for _ in range(N_AUG_SIM_BY_FW.get(fw, 20)):
-            xs.append(augment_sim(x, fw)); ys.append(int(ye))
-    return np.array(xs, dtype=np.float32), np.array(ys, dtype=np.int32)
