@@ -32,4 +32,4 @@ assert "Conv1D(32, 5, strides=5" in src
 assert "Conv1D(32, 3, strides=3" in src
 assert "GlobalAveragePooling1D" in src
 print("3. a-CNN layers/strides per design: PASS")
-print("slice 6a verification: PASS")
+print("all baseline checks: PASS")

@@ -72,4 +72,4 @@ print("4. finite outputs, correct counts: PASS")
 # 5. Uniform counts replace per-framework tables.
 assert (zp.N_AUG_SIM, zp.N_AUG_EXP) == (26, 38)
 print("5. uniform counts 26/38: PASS")
-print("slice 3 verification: PASS")
+print("all class-blind checks: PASS")

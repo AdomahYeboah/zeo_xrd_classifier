@@ -70,7 +70,7 @@ random.seed(RANDOM_SEED)
 tf.random.set_seed(RANDOM_SEED)
 
 
-# Class-blind augmentation governing set (S1S3S4S5-effective).
+# Class-blind augmentation governing set (comparison-calibrated).
 # Calibrated against experimental training patterns vs idealized IZA
 # references (median over 4 comparisons); see calibrate_S1S2_globals.py.
 EFF = {

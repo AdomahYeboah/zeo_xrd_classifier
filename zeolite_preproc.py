@@ -297,11 +297,11 @@ def phi_zero_displacement(y):
         y, left=0.0, right=0.0).astype(np.float32)
 
 
-"""Class-blind augmentation pipeline (S1S3S4S5-effective).
+"""Class-blind augmentation pipeline (comparison-calibrated effective set).
 
-Ported semantics from the verified six-condition notebook. Takes no class
-label: every pattern sees the same operators and ranges. Preferred
-orientation is handled structure-side (March-Dollase re-simulation into
+Reference implementation of the paper pipeline. Takes no class label:
+every pattern sees the same operators and ranges. Preferred orientation
+is handled structure-side (March-Dollase re-simulation into
 iza_tex_xy/cod_tex_xy); there is intentionally no per-peak operator here.
 """
 
@@ -384,7 +384,7 @@ def augment_pattern(y, G, is_sim):
 
 
 def minimal_augment(y):
-    """Minimal level: S1-range broadening plus grid shift at identical counts."""
+    """Minimal level: comparison-range broadening plus grid shift at identical counts."""
     bp = EFF["broadening"]
     y = np.clip(np.convolve(y.copy(), _pseudo_voigt_kernel(
         np.random.uniform(bp["fwhm_min"], bp["fwhm_max"]),

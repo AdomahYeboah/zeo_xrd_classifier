@@ -10,7 +10,7 @@ Classifies powder XRD patterns of zeolites into four framework types (FAU, FER, 
 | `zeolite_preproc.py` | CIF-to-pattern simulation worker, preprocessing, class-blind physics-informed augmentation. |
 | `zeolite_vis.py` | Grad-CAM computation and plotting. |
 | `zeolite_cnn_multiscale.py` | Model definition, training loops, evaluation. Run this file. |
-| `calibration/calibrate_S1S2_globals.py` | Derives S1 broadening/amorphous ranges and rescale quantiles from training patterns vs IZA references. |
+| `calibration/calibrate_comparison_globals.py` | Derives comparison broadening/amorphous ranges and rescale quantiles from training patterns vs IZA references. |
 | `calibration/fit_caglioti.py` | Constrained Caglioti fit (binned medians + NNLS + FIT_OK gate) from unlabelled patterns. |
 | `calibration/resimulate_texture.py` | Re-simulates patterns with structure-side March-Dollase texture into separate tex dirs. |
 | `zeolite_baselines.py` | Paper baseline classifiers: a-CNN port plus RF, SVM, GBC with shared protocol. |
@@ -59,7 +59,7 @@ Training logs per-class pattern counts and accuracy after the run. Checkpoints a
 ## Calibration (run before training)
 
 ```
-python calibration/calibrate_S1S2_globals.py --base <BASE> --out-dir <OUT>
+python calibration/calibrate_comparison_globals.py --base <BASE> --out-dir <OUT>
 python calibration/fit_caglioti.py --unlab-dir <BASE>/unlabelled_xy --exp-train-dir <BASE>/exp_label_copy
 ```
 
@@ -70,7 +70,7 @@ The first script compares four idealized IZA references against the same-framewo
 1. Simulation: CIF files are converted to .xy patterns by a subprocess worker using pymatgen (CuKa radiation, 5 to 50 degrees 2-theta, 0.05 degree step, Gaussian peaks with 0.2 degree FWHM). Preferred orientation enters structure-side: re-simulation with per-reflection March-Dollase texture (random axis per structure, r uniform 0.5-1.0). Existing .xy files are reused, so interrupted runs resume where they stopped.
 2. Preprocessing: experimental patterns whose native step is finer than `STEP * 0.75` are resampled onto the grid with a box pre-filter followed by Lanczos-2 interpolation, which suppresses aliasing artefacts. SNIP background subtraction, Savitzky-Golay smoothing and max-normalisation follow.
 3. Noise and envelope pools: unlabelled experimental patterns supply noise residuals and intensity envelopes that augmentation draws from.
-4. Augmentation: one class-blind pipeline transforms every pattern identically (`augment_pattern` takes no class label). Ranges are shared across frameworks: S1 broadening or fitted Caglioti render, data-dependent top-3 intensity rescale, grid shift, amorphous hump, impurity peaks, envelope blends, measured noise, slope drift, and sim-only resampling jitter. Uniform counts: 26 copies per simulated pattern, 38 per experimental training pattern, raw originals retained. Reduced levels: none (raw only) and minimal (broadening plus grid shift at identical counts).
+4. Augmentation: one class-blind pipeline transforms every pattern identically (`augment_pattern` takes no class label). Ranges are shared across frameworks: comparison-calibrated broadening or fitted Caglioti render, data-dependent top-3 intensity rescale, grid shift, amorphous hump, impurity peaks, envelope blends, measured noise, slope drift, and sim-only resampling jitter. Uniform counts: 26 copies per simulated pattern, 38 per experimental training pattern, raw originals retained. Reduced levels: none (raw only) and minimal (broadening plus grid shift at identical counts).
 5. Model: Conv1D stem, three multiscale blocks with parallel kernels of size 3, 7, 15 and 31, a CAM convolution, global average pooling, a 128-dimensional L2-normalized embedding, temperature-scaled ($\tau$ = 18) softmax readout over the four classes.
 6. Training: class-weighted sparse categorical cross entropy (weights 0.95/3.00/1.85/1.75 for FAU/FER/LTA/MFI) with ReduceLROnPlateau and early stopping on the sim-only validation set. Checkpoints restore the best validation weights.
 7. Evaluation and interpretation: accuracy, macro-F1 and MCC on the held-out 40-pattern test set; mean Grad-CAM maps per class; per-sample CAMs for test predictions. Reference run: accuracy 0.875, macro-F1 0.812, MCC 0.793 (single run, n=40).

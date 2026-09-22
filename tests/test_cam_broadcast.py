@@ -1,4 +1,4 @@
-"""Slice 1 verification: CAM channel-weight broadcasting (numpy mirror, TF absent locally).
+"""CAM channel-weight broadcasting check (numpy mirror, TF absent locally).
 
 Old code `weights[:, :, None]` expands (1, C) -> (1, C, 1), which only
 multiplies against conv_out (1, T, C) when T == C and otherwise crashes or
@@ -27,4 +27,4 @@ t = 7
 assert np.isclose(good[0, t], (weights[0] * conv_out[0, t]).sum())
 print("fixed code shape (1, T) with correct channel alignment: PASS")
 assert not bad_ok, "old code should not be correct for T != C"
-print("slice 1 verification: PASS")
+print("all broadcast checks: PASS")
