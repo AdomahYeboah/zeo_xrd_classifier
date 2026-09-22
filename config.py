@@ -2,7 +2,7 @@
 Central configuration for the zeolite XRD framework classifier.
 
 All paths can be overridden with environment variables prefixed ZEO_XRD_,
-e.g. set ZEO_XRD_BASE=D:\\IT\\project_exp before running.
+e.g. set ZEO_XRD_BASE=D:\data\project_exp before running.
 """
 
 import logging

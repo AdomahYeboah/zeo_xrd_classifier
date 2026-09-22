@@ -8,7 +8,7 @@ S2: Oviedo-style statistics measured on the 7 anchors (FWHM quantiles, peak shif
     downstream: both dicts are single global sets, no framework branching.
 
 Usage:
-    python calibrate_S1S2_globals.py --base "D:\\IT\\manuscript_IMMI - Copy (3) - Copy\\project_exp" --out-dir .../calibration_S1S2
+    python calibrate_S1S2_globals.py --base <project_exp> --out-dir <calibration_S1S2>
 """
 
 import argparse

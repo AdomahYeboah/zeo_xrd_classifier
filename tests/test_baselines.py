@@ -1,11 +1,12 @@
-"""Slice 6a verification: baseline configs match the paper (no TF needed)."""
+"""Baseline configs match the paper (no TF needed)."""
 import ast
 import pathlib
 import sys
 
-sys.path.insert(0, r"C:\Users\USER\AppData\Local\Temp\opencode\gh-sync")
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-src = pathlib.Path(r"C:\Users\USER\AppData\Local\Temp\opencode\gh-sync\zeolite_baselines.py").read_text()
+src = (ROOT / "zeolite_baselines.py").read_text()
 ast.parse(src)
 
 # Paper models only: a-CNN, RF, SVM, GBC. Nothing else.

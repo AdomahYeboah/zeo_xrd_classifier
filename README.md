@@ -82,10 +82,10 @@ Each path constant in `config.py` can be overridden with an environment variable
 Example for a local Windows run:
 
 ```
-set ZEO_XRD_BASE=D:\IT\project_exp
-set ZEO_XRD_IZA_XY_TMP=D:\IT\tmp\iza_xy
-set ZEO_XRD_COD_XY_TMP=D:\IT\tmp\cod_xy
-set ZEO_XRD_WORKER_CIF=D:\IT\simulate_cif_worker.py
+set ZEO_XRD_BASE=D:\data\project_exp
+set ZEO_XRD_IZA_XY_TMP=D:\data\tmp\iza_xy
+set ZEO_XRD_COD_XY_TMP=D:\data\tmp\cod_xy
+set ZEO_XRD_WORKER_CIF=D:\data\simulate_cif_worker.py
 python zeolite_cnn_multiscale.py
 ```
 

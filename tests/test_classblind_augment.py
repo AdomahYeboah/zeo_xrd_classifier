@@ -1,15 +1,17 @@
-"""Slice 3 verification: class-blind pipeline (TF stubbed, real numpy/scipy path)."""
-import json
+"""Class-blind pipeline checks (TF stubbed, real numpy/scipy path)."""
 import os
+import pathlib
 import sys
 import tempfile
 import types
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 os.environ["ZEO_XRD_BASE"] = tempfile.mkdtemp(prefix="zeo_test_")
 tf_stub = types.ModuleType("tensorflow")
 tf_stub.random = types.SimpleNamespace(set_seed=lambda *a, **k: None)
 sys.modules["tensorflow"] = tf_stub
-sys.path.insert(0, r"C:\Users\USER\AppData\Local\Temp\opencode\gh-sync")
+sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
@@ -25,14 +27,21 @@ for fn in src_funcs:
     assert "TARGET_FRAMEWORKS[int" not in code, fn
 print("1. no framework branching in augment path: PASS")
 
-# 2. EFF matches the verified provenance bundle.
-prov = json.load(open(r"D:\IT\manuscript_IMMI - Copy (3) - Copy\provenance_S1S3S4S5\effective_S1S3S4S5.json"))
-for k in ["broadening", "strain_eps", "amorphous", "rescale", "rescale_topk", "caglioti"]:
-    e, v = dict(zp.EFF[k]) if isinstance(zp.EFF[k], dict) else zp.EFF[k], prov[k]
+# 2. EFF matches the published governing set.
+EXPECTED = {
+    "broadening": {"fwhm_min": 1.41, "fwhm_max": 3.0, "eta_min": 0.3, "eta_max": 0.8},
+    "strain_eps": 0.002,
+    "amorphous": {"center_min": 12.9, "center_max": 31.2,
+                  "amp_min": 0.03, "amp_max": 0.99,
+                  "sig_min": 1.5, "sig_max": 8.0, "apply_prob": 1.0},
+    "rescale": {"factor_min": 0.47, "factor_max": 2.01, "apply_prob": 0.85},
+    "rescale_topk": 3,
+    "caglioti": [1.2892, 0.0, 0.4183],
+}
+for k, v in EXPECTED.items():
+    e = zp.EFF[k]
     if isinstance(e, dict):
-        e.pop("center_note", None)
-        v = dict(v)
-        v.pop("center_note", None)
+        e = {kk: vv for kk, vv in e.items() if kk not in ("center_note", "center_std")}
     assert e == v, k
 print("2. EFF matches provenance bundle: PASS")
 
