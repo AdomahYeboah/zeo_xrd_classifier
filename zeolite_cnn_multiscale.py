@@ -152,7 +152,7 @@ def train_final_and_cam():
 
     X_exp, y_exp_str, exp_paths = load_labeled_exp(EXP_TRAIN_DIR)
     y_exp = encoder.transform(y_exp_str)
-    log.info("experimental anchors: %s", dict(zip(*np.unique(y_exp_str, return_counts=True))))
+    log.info("experimental training patterns: %s", dict(zip(*np.unique(y_exp_str, return_counts=True))))
 
     X_test, y_test_str, test_paths = load_labeled_exp(EXP_TEST_DIR)
     y_test = encoder.transform(y_test_str)
@@ -173,7 +173,7 @@ def train_final_and_cam():
                     class_weight=CLASS_WEIGHT)
 
     _, _ = evaluate_model(model, X_test, y_test, "final/test")
-    _, _ = evaluate_model(model, X_exp, y_exp, "final/anchors")
+    _, _ = evaluate_model(model, X_exp, y_exp, "final/train")
 
     X_by_class = {fw: X_sim[y_sim == encoder.transform([fw])[0]] for fw in TARGET_FRAMEWORKS}
     plot_average_cams(model, X_by_class, CAM_DIR)
